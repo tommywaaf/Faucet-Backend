@@ -69,7 +69,7 @@ app.post("/faucet", async (c) => {
     const tx = await sendFaucetTransaction(c.env, assetId, address.trim(), amount);
 
     const ip = getClientIp(c);
-    await recordSuccessfulRequest(c.env.RATE_LIMIT, ip);
+    await recordSuccessfulRequest(c.env.RATE_LIMIT, ip, assetId);
 
     return c.json({
       success: true,
