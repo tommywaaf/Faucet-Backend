@@ -4,7 +4,7 @@ compatibility_date = "2025-03-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-ALLOWED_ORIGIN = "https://killhitstudios.com"
+ALLOWED_ORIGINS = "https://killhitstudios.com,https://www.killhitstudios.com"
 FIREBLOCKS_VAULT_ID = "0"
 
 # After running: wrangler kv namespace create RATE_LIMIT

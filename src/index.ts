@@ -7,7 +7,7 @@ import { sendFaucetTransaction } from "./fireblocks";
 export type Env = {
   Bindings: {
     RATE_LIMIT: KVNamespace;
-    ALLOWED_ORIGIN: string;
+    ALLOWED_ORIGINS: string;
     FIREBLOCKS_API_KEY: string;
     FIREBLOCKS_SECRET_KEY: string;
     FIREBLOCKS_VAULT_ID: string;
@@ -17,10 +17,11 @@ export type Env = {
 const app = new Hono<Env>();
 
 app.use("/*", async (c, next) => {
-  const origin = c.env.ALLOWED_ORIGIN;
+  const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
   const handler = cors({
-    origin,
-    allowMethods: ["POST", "OPTIONS"],
+    origin: (requestOrigin) =>
+      allowedOrigins.includes(requestOrigin) ? requestOrigin : "",
+    allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type"],
     maxAge: 86400,
   });
@@ -31,7 +32,8 @@ app.use("/faucet", rateLimitMiddleware);
 
 app.post("/faucet", async (c) => {
   const origin = c.req.header("origin");
-  if (origin !== c.env.ALLOWED_ORIGIN) {
+  const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
+  if (!origin || !allowedOrigins.includes(origin)) {
     return c.json({ error: "Forbidden" }, 403);
   }
 
