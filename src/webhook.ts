@@ -12,6 +12,7 @@ interface SessionData {
 interface HookData {
   sessionId: string;
   createdAt: string;
+  secret?: string;
 }
 
 interface WebhookEvent {
@@ -60,6 +61,7 @@ app.get("/wht/session", async (c) => {
               id: hookId,
               createdAt: hook.createdAt,
               eventCount: events.length,
+              ...(hook.secret ? { secret: hook.secret } : {}),
             };
           }),
         )
@@ -97,13 +99,23 @@ app.post("/wht/generate", async (c) => {
   );
   if (!session) return c.json({ error: "Session expired" }, 401);
 
+  let secret: string | undefined;
+  try {
+    const body = await c.req.json<{ secret?: string }>();
+    if (body.secret && typeof body.secret === "string") {
+      secret = body.secret;
+    }
+  } catch {}
+
   const hookId = generateHookId();
   const now = new Date().toISOString();
+  const hookValue: HookData = { sessionId, createdAt: now };
+  if (secret) hookValue.secret = secret;
 
   await Promise.all([
     c.env.WEBHOOK_KV.put(
       `hook:${hookId}`,
-      JSON.stringify({ sessionId, createdAt: now }),
+      JSON.stringify(hookValue),
       { expirationTtl: TTL_30_DAYS },
     ),
     c.env.WEBHOOK_KV.put(`events:${hookId}`, JSON.stringify([]), {
