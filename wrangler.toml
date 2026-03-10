@@ -26,4 +26,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["WebhookListener"]
+new_sqlite_classes = ["WebhookListener"]
