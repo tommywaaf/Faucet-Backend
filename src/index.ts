@@ -1,34 +1,61 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import type { MiddlewareHandler } from "hono";
 import { FAUCET_AMOUNTS } from "./config";
-import { rateLimitMiddleware, recordSuccessfulRequest, getClientIp } from "./rate-limit";
+import {
+  rateLimitMiddleware,
+  recordSuccessfulRequest,
+  getClientIp,
+} from "./rate-limit";
 import { sendFaucetTransaction } from "./fireblocks";
+import webhookApp from "./webhook";
 
-export type Env = {
-  Bindings: {
-    RATE_LIMIT: KVNamespace;
-    ALLOWED_ORIGINS: string;
-    FIREBLOCKS_API_KEY: string;
-    FIREBLOCKS_SECRET_KEY: string;
-    FIREBLOCKS_VAULT_ID: string;
-  };
-};
+export type { Env } from "./types";
+export { WebhookListener } from "./webhook-listener";
+
+import type { Env } from "./types";
 
 const app = new Hono<Env>();
 
-app.use("/*", async (c, next) => {
+const faucetCors: MiddlewareHandler<Env> = async (c, next) => {
   const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
-  const handler = cors({
-    origin: (requestOrigin) =>
-      allowedOrigins.includes(requestOrigin) ? requestOrigin : "",
+  return cors({
+    origin: (o) => (allowedOrigins.includes(o) ? o : ""),
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type"],
     maxAge: 86400,
-  });
-  return handler(c, next);
+  })(c, next);
+};
+app.use("/faucet", faucetCors);
+app.use("/health", faucetCors);
+
+// CORS for /wht/* (credentials-based, specific origin)
+app.use("/wht/*", async (c, next) => {
+  const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
+  return cors({
+    origin: (o) => (allowedOrigins.includes(o) ? o : ""),
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
+    credentials: true,
+    maxAge: 86400,
+  })(c, next);
 });
 
+// CORS for /hook/* (open — external services call these)
+app.use(
+  "/hook/*",
+  cors({
+    origin: "*",
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowHeaders: ["*"],
+    maxAge: 86400,
+  }),
+);
+
 app.use("/faucet", rateLimitMiddleware);
+
+// Webhook testing routes
+app.route("/", webhookApp);
 
 app.post("/faucet", async (c) => {
   const origin = c.req.header("origin");
@@ -50,7 +77,11 @@ app.post("/faucet", async (c) => {
     return c.json({ error: "Missing or invalid assetId" }, 400);
   }
 
-  if (!address || typeof address !== "string" || address.trim().length === 0) {
+  if (
+    !address ||
+    typeof address !== "string" ||
+    address.trim().length === 0
+  ) {
     return c.json({ error: "Missing or invalid address" }, 400);
   }
 
@@ -66,7 +97,12 @@ app.post("/faucet", async (c) => {
   }
 
   try {
-    const tx = await sendFaucetTransaction(c.env, assetId, address.trim(), amount);
+    const tx = await sendFaucetTransaction(
+      c.env,
+      assetId,
+      address.trim(),
+      amount,
+    );
 
     const ip = getClientIp(c);
     await recordSuccessfulRequest(c.env.RATE_LIMIT, ip, assetId);
@@ -80,7 +116,10 @@ app.post("/faucet", async (c) => {
     });
   } catch (err) {
     console.error("Fireblocks transaction failed:", err);
-    return c.json({ error: "Transaction failed. Please try again later." }, 500);
+    return c.json(
+      { error: "Transaction failed. Please try again later." },
+      500,
+    );
   }
 });
 

@@ -1,5 +1,5 @@
 import type { Context, MiddlewareHandler } from "hono";
-import type { Env } from "./index";
+import type { Env } from "./types";
 
 const KV_PREFIX = "rate:";
 const TTL_SECONDS = 86400; // 24 hours

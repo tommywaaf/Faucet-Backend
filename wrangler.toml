@@ -12,3 +12,18 @@ FIREBLOCKS_VAULT_ID = "0"
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
 id = "b2227482a1d14f7baf018e468b92a71f"
+
+# Run: wrangler kv namespace create WEBHOOK_KV
+# then replace the id below with the returned namespace ID
+[[kv_namespaces]]
+binding = "WEBHOOK_KV"
+id = "d00a86d0a9884ab0a4171536903c9d6d"
+
+[durable_objects]
+bindings = [
+  { name = "WEBHOOK_LISTENER", class_name = "WebhookListener" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["WebhookListener"]
