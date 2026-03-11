@@ -1,13 +1,8 @@
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
-import type { Env } from "./types";
+import type { Env, SessionData } from "./types";
 
 const TTL_30_DAYS = 2592000;
-
-interface SessionData {
-  hookIds: string[];
-  createdAt: string;
-}
 
 interface HookData {
   sessionId: string;
@@ -74,7 +69,11 @@ app.get("/wht/session", async (c) => {
   const newId = crypto.randomUUID();
   await c.env.WEBHOOK_KV.put(
     `session:${newId}`,
-    JSON.stringify({ hookIds: [], createdAt: new Date().toISOString() }),
+    JSON.stringify({
+      hookIds: [],
+      handlerIds: [],
+      createdAt: new Date().toISOString(),
+    }),
     { expirationTtl: TTL_30_DAYS },
   );
 

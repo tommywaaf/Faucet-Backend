@@ -9,6 +9,7 @@ import {
 } from "./rate-limit";
 import { sendFaucetTransaction } from "./fireblocks";
 import webhookApp from "./webhook";
+import callbackApp from "./callback";
 
 export type { Env } from "./types";
 export { WebhookListener } from "./webhook-listener";
@@ -41,6 +42,18 @@ app.use("/wht/*", async (c, next) => {
   })(c, next);
 });
 
+// CORS for /cbt/* (credentials-based, same as /wht/*)
+app.use("/cbt/*", async (c, next) => {
+  const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
+  return cors({
+    origin: (o) => (allowedOrigins.includes(o) ? o : ""),
+    allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
+    credentials: true,
+    maxAge: 86400,
+  })(c, next);
+});
+
 // CORS for /hook/* (open — external services call these)
 app.use(
   "/hook/*",
@@ -56,6 +69,9 @@ app.use("/faucet", rateLimitMiddleware);
 
 // Webhook testing routes
 app.route("/", webhookApp);
+
+// Callback handler testing routes
+app.route("/", callbackApp);
 
 app.post("/faucet", async (c) => {
   const origin = c.req.header("origin");

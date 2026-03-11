@@ -14,9 +14,12 @@ export class WebhookListener {
       const pair = new WebSocketPair();
       this.state.acceptWebSocket(pair[1]);
 
-      const hookId = url.pathname.split("/").pop()!;
+      const id = url.pathname.split("/").pop()!;
+      const prefix = url.pathname.includes("/cbt/")
+        ? "handler_events:"
+        : "events:";
       const events =
-        (await this.env.WEBHOOK_KV.get(`events:${hookId}`, "json")) || [];
+        (await this.env.WEBHOOK_KV.get(`${prefix}${id}`, "json")) || [];
       pair[1].send(JSON.stringify({ type: "history", events }));
 
       return new Response(null, { status: 101, webSocket: pair[0] });

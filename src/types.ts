@@ -9,3 +9,9 @@ export type Env = {
     FIREBLOCKS_VAULT_ID: string;
   };
 };
+
+export interface SessionData {
+  hookIds: string[];
+  handlerIds?: string[];
+  createdAt: string;
+}
