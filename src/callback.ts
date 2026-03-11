@@ -35,6 +35,10 @@ interface CallbackEvent {
   action: string;
   verified: boolean;
   rawPayload: Record<string, unknown>;
+  /** Raw request body received from cosigner (JWT string). */
+  rawRequestReceived: string;
+  /** Raw response body sent back to cosigner (signed JWT string). */
+  rawResponseSent: string;
 }
 
 function generateHandlerId(): string {
@@ -348,6 +352,8 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
     action,
     verified: true,
     rawPayload: decoded,
+    rawRequestReceived: rawBody,
+    rawResponseSent: signedResponse,
   };
 
   const events =
