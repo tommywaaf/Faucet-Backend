@@ -330,6 +330,24 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
     handler.callbackPrivateKey,
   );
 
+  try {
+    await jwtVerify(signedResponse, handler.callbackPublicKey);
+    console.log(
+      `[SELF-VERIFY OK] handler=${handlerId} — signed JWT verifies with stored callbackPublicKey`,
+    );
+  } catch (e) {
+    console.error(
+      `[SELF-VERIFY FAIL] handler=${handlerId} — key pair mismatch in KV!`,
+      e,
+    );
+    console.error("callbackPublicKey:", handler.callbackPublicKey);
+    return c.text("Internal signing error", 500);
+  }
+
+  console.log(
+    `[CALLBACK] handler=${handlerId} callbackPublicKey:\n${handler.callbackPublicKey}`,
+  );
+
   const event: CallbackEvent = {
     id: "evt_" + crypto.randomUUID().slice(0, 8),
     timestamp: Date.now(),
