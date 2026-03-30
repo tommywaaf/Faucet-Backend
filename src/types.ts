@@ -7,6 +7,7 @@ export type Env = {
     FIREBLOCKS_API_KEY: string;
     FIREBLOCKS_SECRET_KEY: string;
     FIREBLOCKS_VAULT_ID: string;
+    COSIGNER_API_KEY: string;
   };
 };
 
