@@ -11,12 +11,34 @@ import {
 
 const TTL_30_DAYS = 2592000;
 
+interface PolicyConditions {
+  operations?: string[];
+  assets?: string[];
+  amountMin?: number | null;
+  amountMax?: number | null;
+  amountUsdMin?: number | null;
+  amountUsdMax?: number | null;
+  sourceIds?: string[];
+  destIds?: string[];
+  destAddressTypes?: string[];
+  destAddresses?: string[];
+}
+
+interface PolicyRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  conditions: PolicyConditions;
+  action: "APPROVE" | "REJECT";
+}
+
 interface HandlerData {
   sessionId: string;
   cosignerPublicKey: string;
   callbackPrivateKey: string;
   callbackPublicKey: string;
   action: "APPROVE" | "REJECT";
+  rules: PolicyRule[];
   createdAt: string;
 }
 
@@ -48,6 +70,67 @@ function generateHandlerId(): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
+function evaluateRules(
+  rules: PolicyRule[],
+  tx: Record<string, unknown>,
+): "APPROVE" | "REJECT" | null {
+  const destinations = tx.destinations as
+    | Array<Record<string, unknown>>
+    | undefined;
+  const usdAmount =
+    destinations?.[0]?.amountUSD != null
+      ? Number(destinations[0].amountUSD)
+      : null;
+
+  for (const rule of rules) {
+    if (!rule.enabled) continue;
+    const c = rule.conditions || {};
+    if (c.operations?.length && !c.operations.includes(tx.operation as string))
+      continue;
+    if (c.assets?.length && !c.assets.includes(tx.asset as string)) continue;
+    if (
+      c.amountMin != null &&
+      (tx.amount == null || Number(tx.amount) < c.amountMin)
+    )
+      continue;
+    if (
+      c.amountMax != null &&
+      (tx.amount == null || Number(tx.amount) > c.amountMax)
+    )
+      continue;
+    if (
+      c.amountUsdMin != null &&
+      (usdAmount == null || usdAmount < c.amountUsdMin)
+    )
+      continue;
+    if (
+      c.amountUsdMax != null &&
+      (usdAmount == null || usdAmount > c.amountUsdMax)
+    )
+      continue;
+    if (
+      c.sourceIds?.length &&
+      !c.sourceIds.includes(String(tx.sourceId))
+    )
+      continue;
+    if (c.destIds?.length && !c.destIds.includes(String(tx.destId))) continue;
+    if (
+      c.destAddressTypes?.length &&
+      !c.destAddressTypes.includes(tx.destAddressType as string)
+    )
+      continue;
+    if (
+      c.destAddresses?.length &&
+      !c.destAddresses.some(
+        (a) => a.toLowerCase() === ((tx.destAddress as string) || "").toLowerCase(),
+      )
+    )
+      continue;
+    return rule.action;
+  }
+  return null;
+}
+
 const app = new Hono<Env>();
 
 // -------------------------------------------------------------------------
@@ -77,6 +160,7 @@ app.get("/cbt/session", async (c) => {
               callbackUrl: `${new URL(c.req.url).origin}/callback/${id}`,
               callbackPublicKey: h.callbackPublicKey,
               action: h.action,
+              rules: h.rules ?? [],
               createdAt: h.createdAt,
             };
           }),
@@ -151,6 +235,7 @@ app.post("/cbt/create", async (c) => {
     callbackPrivateKey: privateKey,
     callbackPublicKey: publicKey,
     action: "REJECT",
+    rules: [],
     createdAt: now,
   };
 
@@ -181,6 +266,7 @@ app.post("/cbt/create", async (c) => {
     callbackUrl: `${origin}/callback/${handlerId}`,
     callbackPublicKey: publicKey,
     action: "REJECT" as const,
+    rules: [] as PolicyRule[],
   });
 });
 
@@ -220,6 +306,44 @@ app.put("/cbt/action/:handlerId", async (c) => {
   );
 
   return c.json({ action: body.action });
+});
+
+// -------------------------------------------------------------------------
+// PUT /cbt/rules/:handlerId — replace rules array
+// -------------------------------------------------------------------------
+
+app.put("/cbt/rules/:handlerId", async (c) => {
+  const sessionId = getCookie(c, "wht_session");
+  if (!sessionId) return c.json({ error: "No valid session" }, 401);
+
+  const handlerId = c.req.param("handlerId");
+  const handler = await c.env.WEBHOOK_KV.get<HandlerData>(
+    `handler:${handlerId}`,
+    "json",
+  );
+  if (!handler || handler.sessionId !== sessionId) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  let body: { rules?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!Array.isArray(body.rules)) {
+    return c.json({ error: "rules must be an array" }, 400);
+  }
+
+  handler.rules = body.rules as PolicyRule[];
+  await c.env.WEBHOOK_KV.put(
+    `handler:${handlerId}`,
+    JSON.stringify(handler),
+    { expirationTtl: TTL_30_DAYS },
+  );
+
+  return c.json({ ok: true });
 });
 
 // -------------------------------------------------------------------------
@@ -315,7 +439,7 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
   }
 
   const { requestId } = decoded;
-  const action = handler.action;
+  const action = evaluateRules(handler.rules ?? [], decoded) ?? handler.action;
 
   const responsePayload: Record<string, unknown> = {
     action,
