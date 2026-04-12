@@ -4,6 +4,8 @@ import type { MiddlewareHandler } from "hono";
 import { FAUCET_AMOUNTS } from "./config";
 import { recordSuccessfulRequest, getClientIp } from "./rate-limit";
 import { sendFaucetTransaction } from "./fireblocks";
+import { generateEd25519KeyPair, generateSignedTxId } from "./crypto-utils";
+import type { TxIdSessionData } from "./types";
 import webhookApp from "./webhook";
 import callbackApp from "./callback";
 import cosignerApp from "./cosigner";
@@ -26,6 +28,7 @@ const faucetCors: MiddlewareHandler<Env> = async (c, next) => {
   })(c, next);
 };
 app.use("/faucet", faucetCors);
+app.use("/faucet/*", faucetCors);
 app.use("/health", faucetCors);
 
 // CORS for /wht/* (credentials-based, specific origin)
@@ -99,6 +102,30 @@ app.route("/", cosignerApp);
 // ExternalTxId generator routes
 app.route("/", txIdApp);
 
+const FAUCET_TXID_KV_KEY = "faucet:txid-keypair";
+
+// ── GET /faucet/txid-setup — check whether the faucet signing key is configured
+app.get("/faucet/txid-setup", async (c) => {
+  const existing = await c.env.WEBHOOK_KV.get<TxIdSessionData>(
+    FAUCET_TXID_KV_KEY,
+    "json",
+  );
+  if (existing) return c.json({ configured: true, publicKey: existing.publicKeyHex });
+  return c.json({ configured: false });
+});
+
+// ── POST /faucet/txid-setup — generate and store the Ed25519 key pair (one-time)
+app.post("/faucet/txid-setup", async (c) => {
+  const { privateKeyHex, publicKeyHex } = await generateEd25519KeyPair();
+  const data: TxIdSessionData = {
+    privateKeyHex,
+    publicKeyHex,
+    createdAt: new Date().toISOString(),
+  };
+  await c.env.WEBHOOK_KV.put(FAUCET_TXID_KV_KEY, JSON.stringify(data));
+  return c.json({ configured: true, publicKey: publicKeyHex });
+});
+
 app.post("/faucet", async (c) => {
   const origin = c.req.header("origin");
   const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
@@ -139,11 +166,20 @@ app.post("/faucet", async (c) => {
   }
 
   try {
+    const txidConfig = await c.env.WEBHOOK_KV.get<TxIdSessionData>(
+      FAUCET_TXID_KV_KEY,
+      "json",
+    );
+    const externalTxId = txidConfig
+      ? await generateSignedTxId(txidConfig.privateKeyHex)
+      : undefined;
+
     const tx = await sendFaucetTransaction(
       c.env,
       assetId,
       address.trim(),
       amount,
+      externalTxId,
     );
 
     const ip = getClientIp(c);
@@ -155,6 +191,7 @@ app.post("/faucet", async (c) => {
       status: tx.status,
       assetId,
       amount,
+      ...(externalTxId ? { externalTxId } : {}),
     });
   } catch (err) {
     console.error("Fireblocks transaction failed:", err);

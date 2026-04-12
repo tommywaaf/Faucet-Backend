@@ -16,9 +16,10 @@ export async function sendFaucetTransaction(
   assetId: string,
   destinationAddress: string,
   amount: string,
+  externalTxId?: string,
 ): Promise<TransactionResult> {
   const path = "/v1/transactions";
-  const body = JSON.stringify({
+  const bodyObj: Record<string, unknown> = {
     assetId,
     amount,
     source: {
@@ -30,7 +31,9 @@ export async function sendFaucetTransaction(
       oneTimeAddress: { address: destinationAddress },
     },
     note: `Faucet drip: ${amount} ${assetId}`,
-  });
+  };
+  if (externalTxId) bodyObj.externalTxId = externalTxId;
+  const body = JSON.stringify(bodyObj);
 
   const token = await signJwt(env.FIREBLOCKS_API_KEY, env.FIREBLOCKS_SECRET_KEY, path, body);
 
