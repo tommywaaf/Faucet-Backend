@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, SessionData } from "./types";
+import { verifySignedTxId } from "./crypto-utils";
 import {
   generateRSAKeyPair,
   importPublicKey,
@@ -71,44 +72,6 @@ function generateHandlerId(): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
-function fromHex(hex: string): Uint8Array {
-  const arr = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < arr.length; i++) {
-    arr[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return arr;
-}
-
-function fromBase64Url(str: string): Uint8Array {
-  const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
-  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-async function verifyExternalTxIdSig(
-  externalTxId: string,
-  publicKeyHex: string,
-): Promise<boolean> {
-  try {
-    const parts = externalTxId.split(".");
-    if (parts.length !== 2) return false;
-    const idBytes = fromBase64Url(parts[0]);
-    const sigBytes = fromBase64Url(parts[1]);
-    const pubKey = await crypto.subtle.importKey(
-      "raw",
-      fromHex(publicKeyHex),
-      { name: "Ed25519" },
-      false,
-      ["verify"],
-    );
-    return await crypto.subtle.verify("Ed25519", pubKey, sigBytes, idBytes);
-  } catch {
-    return false;
-  }
-}
 
 async function evaluateRules(
   rules: PolicyRule[],
@@ -171,7 +134,7 @@ async function evaluateRules(
     if (c.externalTxIdPublicKey) {
       const extId = tx.externalTxId as string | undefined;
       if (!extId) continue;
-      const valid = await verifyExternalTxIdSig(extId, c.externalTxIdPublicKey);
+      const valid = await verifySignedTxId(extId, c.externalTxIdPublicKey);
       if (!valid) continue;
     }
     return rule.action;

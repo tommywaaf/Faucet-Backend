@@ -29,34 +29,57 @@ export function fromBase64Url(str: string): Uint8Array {
   return bytes;
 }
 
-export async function generateEd25519KeyPair(): Promise<{
+// HMAC-SHA256: generateKey() is fully supported in Cloudflare Workers.
+// 256-bit key, symmetric — verification runs server-side so the key never
+// needs to leave the Worker for signing; the client only sees it when the
+// user explicitly copies it to configure a policy rule.
+
+export async function generateKeyPair(): Promise<{
   privateKeyHex: string;
   publicKeyHex: string;
 }> {
-  const keyPair = await crypto.subtle.generateKey(
-    { name: "Ed25519" },
+  const key = await crypto.subtle.generateKey(
+    { name: "HMAC", hash: "SHA-256", length: 256 },
     true,
     ["sign", "verify"],
   );
-  const [privateKeyBuf, publicKeyBuf] = await Promise.all([
-    crypto.subtle.exportKey("raw", keyPair.privateKey),
-    crypto.subtle.exportKey("raw", keyPair.publicKey),
-  ]);
-  return {
-    privateKeyHex: toHex(privateKeyBuf),
-    publicKeyHex: toHex(publicKeyBuf),
-  };
+  const keyBuf = await crypto.subtle.exportKey("raw", key);
+  const keyHex = toHex(keyBuf);
+  // Symmetric — both "sides" use the same key
+  return { privateKeyHex: keyHex, publicKeyHex: keyHex };
 }
 
-export async function generateSignedTxId(privateKeyHex: string): Promise<string> {
-  const idBytes = crypto.getRandomValues(new Uint8Array(16));
-  const privateKey = await crypto.subtle.importKey(
+export async function generateSignedTxId(secretKeyHex: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
     "raw",
-    fromHex(privateKeyHex),
-    { name: "Ed25519" },
+    fromHex(secretKeyHex),
+    { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],
   );
-  const sigBuf = await crypto.subtle.sign("Ed25519", privateKey, idBytes);
+  const idBytes = crypto.getRandomValues(new Uint8Array(16));
+  const sigBuf = await crypto.subtle.sign("HMAC", key, idBytes);
   return `${toBase64Url(idBytes)}.${toBase64Url(sigBuf)}`;
+}
+
+export async function verifySignedTxId(
+  externalTxId: string,
+  secretKeyHex: string,
+): Promise<boolean> {
+  try {
+    const parts = externalTxId.split(".");
+    if (parts.length !== 2) return false;
+    const idBytes = fromBase64Url(parts[0]);
+    const sigBytes = fromBase64Url(parts[1]);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      fromHex(secretKeyHex),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    return await crypto.subtle.verify("HMAC", key, sigBytes, idBytes);
+  } catch {
+    return false;
+  }
 }

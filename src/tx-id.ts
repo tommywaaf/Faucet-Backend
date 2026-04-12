@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, TxIdSessionData } from "./types";
-import { generateEd25519KeyPair, generateSignedTxId } from "./crypto-utils";
+import { generateKeyPair, generateSignedTxId } from "./crypto-utils";
 
 const TTL_30_DAYS = 2592000;
 const MAX_BATCH = 100;
@@ -35,7 +35,7 @@ app.get("/tx-id/session", async (c) => {
     sessionId = crypto.randomUUID();
   }
 
-  const { privateKeyHex, publicKeyHex } = await generateEd25519KeyPair();
+  const { privateKeyHex, publicKeyHex } = await generateKeyPair();
   const data: TxIdSessionData = {
     privateKeyHex,
     publicKeyHex,
@@ -111,7 +111,7 @@ app.delete("/tx-id/session", async (c) => {
   const sessionId = getCookie(c, "wht_session");
   if (!sessionId) return c.json({ error: "No session" }, 401);
 
-  const { privateKeyHex, publicKeyHex } = await generateEd25519KeyPair();
+  const { privateKeyHex, publicKeyHex } = await generateKeyPair();
   const data: TxIdSessionData = {
     privateKeyHex,
     publicKeyHex,

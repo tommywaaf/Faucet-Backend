@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 import { FAUCET_AMOUNTS } from "./config";
 import { recordSuccessfulRequest, getClientIp } from "./rate-limit";
 import { sendFaucetTransaction } from "./fireblocks";
-import { generateEd25519KeyPair, generateSignedTxId } from "./crypto-utils";
+import { generateKeyPair, generateSignedTxId } from "./crypto-utils";
 import type { TxIdSessionData } from "./types";
 import webhookApp from "./webhook";
 import callbackApp from "./callback";
@@ -116,7 +116,7 @@ app.get("/faucet/txid-setup", async (c) => {
 
 // ── POST /faucet/txid-setup — generate and store the Ed25519 key pair (one-time)
 app.post("/faucet/txid-setup", async (c) => {
-  const { privateKeyHex, publicKeyHex } = await generateEd25519KeyPair();
+  const { privateKeyHex, publicKeyHex } = await generateKeyPair();
   const data: TxIdSessionData = {
     privateKeyHex,
     publicKeyHex,
