@@ -22,6 +22,7 @@ interface PolicyConditions {
   destIds?: string[];
   destAddressTypes?: string[];
   destAddresses?: string[];
+  externalTxIdPublicKey?: string | null;
 }
 
 interface PolicyRule {
@@ -70,10 +71,49 @@ function generateHandlerId(): string {
   return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
-function evaluateRules(
+function fromHex(hex: string): Uint8Array {
+  const arr = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < arr.length; i++) {
+    arr[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return arr;
+}
+
+function fromBase64Url(str: string): Uint8Array {
+  const base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function verifyExternalTxIdSig(
+  externalTxId: string,
+  publicKeyHex: string,
+): Promise<boolean> {
+  try {
+    const parts = externalTxId.split(".");
+    if (parts.length !== 2) return false;
+    const idBytes = fromBase64Url(parts[0]);
+    const sigBytes = fromBase64Url(parts[1]);
+    const pubKey = await crypto.subtle.importKey(
+      "raw",
+      fromHex(publicKeyHex),
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    return await crypto.subtle.verify("Ed25519", pubKey, sigBytes, idBytes);
+  } catch {
+    return false;
+  }
+}
+
+async function evaluateRules(
   rules: PolicyRule[],
   tx: Record<string, unknown>,
-): "APPROVE" | "REJECT" | null {
+): Promise<"APPROVE" | "REJECT" | null> {
   const destinations = tx.destinations as
     | Array<Record<string, unknown>>
     | undefined;
@@ -122,10 +162,18 @@ function evaluateRules(
     if (
       c.destAddresses?.length &&
       !c.destAddresses.some(
-        (a) => a.toLowerCase() === ((tx.destAddress as string) || "").toLowerCase(),
+        (a) =>
+          a.toLowerCase() ===
+          ((tx.destAddress as string) || "").toLowerCase(),
       )
     )
       continue;
+    if (c.externalTxIdPublicKey) {
+      const extId = tx.externalTxId as string | undefined;
+      if (!extId) continue;
+      const valid = await verifyExternalTxIdSig(extId, c.externalTxIdPublicKey);
+      if (!valid) continue;
+    }
     return rule.action;
   }
   return null;
@@ -439,7 +487,7 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
   }
 
   const { requestId } = decoded;
-  const action = evaluateRules(handler.rules ?? [], decoded) ?? handler.action;
+  const action = (await evaluateRules(handler.rules ?? [], decoded)) ?? handler.action;
 
   const responsePayload: Record<string, unknown> = {
     action,
