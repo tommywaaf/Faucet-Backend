@@ -2,11 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { MiddlewareHandler } from "hono";
 import { FAUCET_AMOUNTS } from "./config";
-import {
-  rateLimitMiddleware,
-  recordSuccessfulRequest,
-  getClientIp,
-} from "./rate-limit";
+import { recordSuccessfulRequest, getClientIp } from "./rate-limit";
 import { sendFaucetTransaction } from "./fireblocks";
 import webhookApp from "./webhook";
 import callbackApp from "./callback";
@@ -90,8 +86,6 @@ app.use(
     maxAge: 86400,
   }),
 );
-
-app.use("/faucet", rateLimitMiddleware);
 
 // Webhook testing routes
 app.route("/", webhookApp);
