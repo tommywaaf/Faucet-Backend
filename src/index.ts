@@ -11,6 +11,7 @@ import { sendFaucetTransaction } from "./fireblocks";
 import webhookApp from "./webhook";
 import callbackApp from "./callback";
 import cosignerApp from "./cosigner";
+import txIdApp from "./tx-id";
 
 export type { Env } from "./types";
 export { WebhookListener } from "./webhook-listener";
@@ -67,6 +68,18 @@ app.use("/cosigner/*", async (c, next) => {
   })(c, next);
 });
 
+// CORS for /tx-id/* (credentials-based for session cookie)
+app.use("/tx-id/*", async (c, next) => {
+  const allowedOrigins = c.env.ALLOWED_ORIGINS.split(",");
+  return cors({
+    origin: (o) => (allowedOrigins.includes(o) ? o : ""),
+    allowMethods: ["GET", "POST", "DELETE", "OPTIONS"],
+    allowHeaders: ["Content-Type"],
+    credentials: true,
+    maxAge: 86400,
+  })(c, next);
+});
+
 // CORS for /hook/* (open — external services call these)
 app.use(
   "/hook/*",
@@ -88,6 +101,9 @@ app.route("/", callbackApp);
 
 // Easy Cosigner routes
 app.route("/", cosignerApp);
+
+// ExternalTxId generator routes
+app.route("/", txIdApp);
 
 app.post("/faucet", async (c) => {
   const origin = c.req.header("origin");

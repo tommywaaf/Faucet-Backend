@@ -16,3 +16,9 @@ export interface SessionData {
   handlerIds?: string[];
   createdAt: string;
 }
+
+export interface TxIdSessionData {
+  privateKeyHex: string;
+  publicKeyHex: string;
+  createdAt: string;
+}
