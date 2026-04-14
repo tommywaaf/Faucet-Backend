@@ -10,7 +10,7 @@ import {
   jwtSign,
 } from "./jwt";
 
-const TTL_30_DAYS = 2592000;
+const SESSION_TTL = 31536000; // 1 year — sliding window, refreshed on every session access
 
 interface PolicyConditions {
   operations?: string[];
@@ -178,6 +178,20 @@ app.get("/cbt/session", async (c) => {
         )
       ).filter(Boolean);
 
+      // Sliding window: refresh both the KV TTL and the cookie on every access
+      await c.env.WEBHOOK_KV.put(
+        `session:${sessionId}`,
+        JSON.stringify(session),
+        { expirationTtl: SESSION_TTL },
+      );
+      setCookie(c, "wht_session", sessionId, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "None",
+        secure: true,
+        maxAge: SESSION_TTL,
+      });
+
       return c.json({ handlers });
     }
   }
@@ -190,7 +204,7 @@ app.get("/cbt/session", async (c) => {
       handlerIds: [],
       createdAt: new Date().toISOString(),
     }),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   setCookie(c, "wht_session", newId, {
@@ -198,7 +212,7 @@ app.get("/cbt/session", async (c) => {
     httpOnly: true,
     sameSite: "None",
     secure: true,
-    maxAge: TTL_30_DAYS,
+    maxAge: SESSION_TTL,
   });
 
   return c.json({ handlers: [] });
@@ -254,12 +268,12 @@ app.post("/cbt/create", async (c) => {
     c.env.WEBHOOK_KV.put(
       `handler:${handlerId}`,
       JSON.stringify(handlerData),
-      { expirationTtl: TTL_30_DAYS },
+      { expirationTtl: SESSION_TTL },
     ),
     c.env.WEBHOOK_KV.put(
       `handler_events:${handlerId}`,
       JSON.stringify([]),
-      { expirationTtl: TTL_30_DAYS },
+      { expirationTtl: SESSION_TTL },
     ),
   ]);
 
@@ -268,7 +282,7 @@ app.post("/cbt/create", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `session:${sessionId}`,
     JSON.stringify(session),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   const origin = new URL(c.req.url).origin;
@@ -313,7 +327,7 @@ app.put("/cbt/action/:handlerId", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `handler:${handlerId}`,
     JSON.stringify(handler),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   return c.json({ action: body.action });
@@ -351,7 +365,7 @@ app.put("/cbt/rules/:handlerId", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `handler:${handlerId}`,
     JSON.stringify(handler),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   return c.json({ ok: true });
@@ -390,7 +404,7 @@ app.delete("/cbt/:handlerId", async (c) => {
     await c.env.WEBHOOK_KV.put(
       `session:${sessionId}`,
       JSON.stringify(session),
-      { expirationTtl: TTL_30_DAYS },
+      { expirationTtl: SESSION_TTL },
     );
   }
 
@@ -518,7 +532,7 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `handler_events:${handlerId}`,
     JSON.stringify(events.slice(0, 30)),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   try {

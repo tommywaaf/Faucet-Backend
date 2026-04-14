@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, SessionData } from "./types";
 
-const TTL_30_DAYS = 2592000;
+const SESSION_TTL = 31536000; // 1 year — sliding window, refreshed on every session access
 
 interface HookData {
   sessionId: string;
@@ -62,6 +62,20 @@ app.get("/wht/session", async (c) => {
         )
       ).filter(Boolean);
 
+      // Sliding window: refresh both the KV TTL and the cookie on every access
+      await c.env.WEBHOOK_KV.put(
+        `session:${sessionId}`,
+        JSON.stringify(session),
+        { expirationTtl: SESSION_TTL },
+      );
+      setCookie(c, "wht_session", sessionId, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "None",
+        secure: true,
+        maxAge: SESSION_TTL,
+      });
+
       return c.json({ sessionId, hookIds: session.hookIds, hooks });
     }
   }
@@ -74,7 +88,7 @@ app.get("/wht/session", async (c) => {
       handlerIds: [],
       createdAt: new Date().toISOString(),
     }),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   setCookie(c, "wht_session", newId, {
@@ -82,7 +96,7 @@ app.get("/wht/session", async (c) => {
     httpOnly: true,
     sameSite: "None",
     secure: true,
-    maxAge: TTL_30_DAYS,
+    maxAge: SESSION_TTL,
   });
 
   return c.json({ sessionId: newId, hookIds: [], hooks: [] });
@@ -115,10 +129,10 @@ app.post("/wht/generate", async (c) => {
     c.env.WEBHOOK_KV.put(
       `hook:${hookId}`,
       JSON.stringify(hookValue),
-      { expirationTtl: TTL_30_DAYS },
+      { expirationTtl: SESSION_TTL },
     ),
     c.env.WEBHOOK_KV.put(`events:${hookId}`, JSON.stringify([]), {
-      expirationTtl: TTL_30_DAYS,
+      expirationTtl: SESSION_TTL,
     }),
   ]);
 
@@ -126,7 +140,7 @@ app.post("/wht/generate", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `session:${sessionId}`,
     JSON.stringify(session),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   const origin = new URL(c.req.url).origin;
@@ -160,7 +174,7 @@ app.delete("/wht/url/:hookId", async (c) => {
     await c.env.WEBHOOK_KV.put(
       `session:${sessionId}`,
       JSON.stringify(session),
-      { expirationTtl: TTL_30_DAYS },
+      { expirationTtl: SESSION_TTL },
     );
   }
 
@@ -190,7 +204,7 @@ app.delete("/wht/events/:hookId", async (c) => {
   }
 
   await c.env.WEBHOOK_KV.put(`events:${hookId}`, JSON.stringify([]), {
-    expirationTtl: TTL_30_DAYS,
+    expirationTtl: SESSION_TTL,
   });
 
   try {
@@ -246,7 +260,7 @@ app.all("/hook/:hookId", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `events:${hookId}`,
     JSON.stringify(events.slice(0, 30)),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   try {

@@ -3,7 +3,7 @@ import { getCookie, setCookie } from "hono/cookie";
 import type { Env, TxIdSessionData } from "./types";
 import { generateKeyPair, generateSignedTxId } from "./crypto-utils";
 
-const TTL_30_DAYS = 2592000;
+const SESSION_TTL = 31536000; // 1 year — sliding window, refreshed on every session access
 const MAX_BATCH = 100;
 
 async function getOrCreateSession(
@@ -27,6 +27,19 @@ app.get("/tx-id/session", async (c) => {
   if (sessionId) {
     const existing = await getOrCreateSession(c.env.WEBHOOK_KV, sessionId);
     if (existing) {
+      // Sliding window: refresh both the KV TTL and the cookie on every access
+      await c.env.WEBHOOK_KV.put(
+        `txid-session:${sessionId}`,
+        JSON.stringify(existing),
+        { expirationTtl: SESSION_TTL },
+      );
+      setCookie(c, "wht_session", sessionId, {
+        path: "/",
+        httpOnly: true,
+        sameSite: "None",
+        secure: true,
+        maxAge: SESSION_TTL,
+      });
       return c.json({ publicKey: existing.publicKeyHex });
     }
   }
@@ -45,7 +58,7 @@ app.get("/tx-id/session", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `txid-session:${sessionId}`,
     JSON.stringify(data),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   setCookie(c, "wht_session", sessionId, {
@@ -53,7 +66,7 @@ app.get("/tx-id/session", async (c) => {
     httpOnly: true,
     sameSite: "None",
     secure: true,
-    maxAge: TTL_30_DAYS,
+    maxAge: SESSION_TTL,
   });
 
   return c.json({ publicKey: publicKeyHex });
@@ -121,7 +134,7 @@ app.delete("/tx-id/session", async (c) => {
   await c.env.WEBHOOK_KV.put(
     `txid-session:${sessionId}`,
     JSON.stringify(data),
-    { expirationTtl: TTL_30_DAYS },
+    { expirationTtl: SESSION_TTL },
   );
 
   return c.json({ publicKey: publicKeyHex });
