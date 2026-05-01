@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { Env, SessionData } from "./types";
 import { verifySignedTxId } from "./crypto-utils";
@@ -34,12 +35,29 @@ interface PolicyRule {
   action: "APPROVE" | "REJECT";
 }
 
+type SignAction = "APPROVE" | "REJECT";
+type ApprovalAction = "APPROVE" | "REJECT" | "IGNORE";
+
+type RequestType =
+  | "tx_sign"
+  | "tx_approval"
+  | "config_change_sign"
+  | "config_change_approval";
+
 interface HandlerData {
   sessionId: string;
   cosignerPublicKey: string;
   callbackPrivateKey: string;
   callbackPublicKey: string;
-  action: "APPROVE" | "REJECT";
+  /** Default action for signing requests (tx_sign, config_change_sign). */
+  action: SignAction;
+  /**
+   * Default action for approval requests (tx_approval, config_change_approval).
+   * IGNORE dismisses the request without denying it (other quorum approvers
+   * may still act independently). Per Fireblocks docs, IGNORE is only valid
+   * for approval requests, not signing.
+   */
+  approvalAction: ApprovalAction;
   rules: PolicyRule[];
   createdAt: string;
 }
@@ -47,6 +65,8 @@ interface HandlerData {
 interface CallbackEvent {
   id: string;
   timestamp: number;
+  /** Which Co-Signer endpoint triggered this event. */
+  requestType: RequestType;
   requestId: string;
   operation: string;
   asset: string;
@@ -171,6 +191,7 @@ app.get("/cbt/session", async (c) => {
               callbackUrl: `${new URL(c.req.url).origin}/callback/${id}`,
               callbackPublicKey: h.callbackPublicKey,
               action: h.action,
+              approvalAction: h.approvalAction ?? "REJECT",
               rules: h.rules ?? [],
               createdAt: h.createdAt,
             };
@@ -260,6 +281,7 @@ app.post("/cbt/create", async (c) => {
     callbackPrivateKey: privateKey,
     callbackPublicKey: publicKey,
     action: "REJECT",
+    approvalAction: "REJECT",
     rules: [],
     createdAt: now,
   };
@@ -290,7 +312,8 @@ app.post("/cbt/create", async (c) => {
     handlerId,
     callbackUrl: `${origin}/callback/${handlerId}`,
     callbackPublicKey: publicKey,
-    action: "REJECT" as const,
+    action: "REJECT" as SignAction,
+    approvalAction: "REJECT" as ApprovalAction,
     rules: [] as PolicyRule[],
   });
 });
@@ -312,25 +335,54 @@ app.put("/cbt/action/:handlerId", async (c) => {
     return c.json({ error: "Not found" }, 404);
   }
 
-  let body: { action?: string };
+  let body: { action?: string; approvalAction?: string };
   try {
     body = await c.req.json();
   } catch {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  if (body.action !== "APPROVE" && body.action !== "REJECT") {
-    return c.json({ error: "Action must be APPROVE or REJECT" }, 400);
+  if (body.action == null && body.approvalAction == null) {
+    return c.json(
+      { error: "Provide at least one of: action, approvalAction" },
+      400,
+    );
   }
 
-  handler.action = body.action;
+  if (body.action != null) {
+    if (body.action !== "APPROVE" && body.action !== "REJECT") {
+      return c.json(
+        { error: "action must be APPROVE or REJECT (IGNORE is not valid for signing requests)" },
+        400,
+      );
+    }
+    handler.action = body.action;
+  }
+
+  if (body.approvalAction != null) {
+    if (
+      body.approvalAction !== "APPROVE" &&
+      body.approvalAction !== "REJECT" &&
+      body.approvalAction !== "IGNORE"
+    ) {
+      return c.json(
+        { error: "approvalAction must be APPROVE, REJECT, or IGNORE" },
+        400,
+      );
+    }
+    handler.approvalAction = body.approvalAction;
+  }
+
   await c.env.WEBHOOK_KV.put(
     `handler:${handlerId}`,
     JSON.stringify(handler),
     { expirationTtl: SESSION_TTL },
   );
 
-  return c.json({ action: body.action });
+  return c.json({
+    action: handler.action,
+    approvalAction: handler.approvalAction,
+  });
 });
 
 // -------------------------------------------------------------------------
@@ -437,10 +489,23 @@ app.get("/cbt/ws/:handlerId", async (c) => {
 });
 
 // -------------------------------------------------------------------------
-// POST /callback/:handlerId/v2/tx_sign_request — Co-Signer endpoint
+// Shared callback handler — used by all four Co-Signer endpoints
 // -------------------------------------------------------------------------
+//
+// Per Fireblocks Co-Signer Callback Handler docs, the Co-Signer POSTs to:
+//   /v2/tx_sign_request                 — transaction signing
+//   /v2/tx_approval_request             — transaction approval (HA mode)
+//   /v2/config_change_sign_request      — config change signing
+//   /v2/config_change_approval_request  — config change approval
+//
+// For each, we must respond within 30s with a signed JWT containing
+// { action, requestId, rejectionReason? }. IGNORE is only valid for
+// approval requests.
 
-app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
+async function handleCallback(
+  c: Context<Env>,
+  requestType: RequestType,
+): Promise<Response> {
   const handlerId = c.req.param("handlerId");
   const handler = await c.env.WEBHOOK_KV.get<HandlerData>(
     `handler:${handlerId}`,
@@ -464,7 +529,19 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
   }
 
   const { requestId } = decoded;
-  const action = (await evaluateRules(handler.rules ?? [], decoded)) ?? handler.action;
+
+  // Decide the action.
+  // Rules only apply to tx_sign (per current product scope).
+  // Everything else uses the appropriate default (signing vs approval).
+  let action: SignAction | ApprovalAction;
+  if (requestType === "tx_sign") {
+    action = (await evaluateRules(handler.rules ?? [], decoded)) ?? handler.action;
+  } else if (requestType === "config_change_sign") {
+    action = handler.action;
+  } else {
+    // tx_approval or config_change_approval
+    action = handler.approvalAction ?? "REJECT";
+  }
 
   const responsePayload: Record<string, unknown> = {
     action,
@@ -481,25 +558,22 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
 
   try {
     await jwtVerify(signedResponse, handler.callbackPublicKey);
-    console.log(
-      `[SELF-VERIFY OK] handler=${handlerId} — signed JWT verifies with stored callbackPublicKey`,
-    );
   } catch (e) {
     console.error(
       `[SELF-VERIFY FAIL] handler=${handlerId} — key pair mismatch in KV!`,
       e,
     );
-    console.error("callbackPublicKey:", handler.callbackPublicKey);
     return c.text("Internal signing error", 500);
   }
 
   console.log(
-    `[CALLBACK] handler=${handlerId} callbackPublicKey:\n${handler.callbackPublicKey}`,
+    `[CALLBACK] handler=${handlerId} type=${requestType} action=${action}`,
   );
 
   const event: CallbackEvent = {
     id: "evt_" + crypto.randomUUID().slice(0, 8),
     timestamp: Date.now(),
+    requestType,
     requestId: String(decoded.requestId ?? ""),
     operation: String(decoded.operation ?? ""),
     asset: String(decoded.asset ?? ""),
@@ -545,6 +619,26 @@ app.post("/callback/:handlerId/v2/tx_sign_request", async (c) => {
   } catch {}
 
   return c.text(signedResponse);
-});
+}
+
+// -------------------------------------------------------------------------
+// Co-Signer endpoints
+// -------------------------------------------------------------------------
+
+app.post("/callback/:handlerId/v2/tx_sign_request", (c) =>
+  handleCallback(c, "tx_sign"),
+);
+
+app.post("/callback/:handlerId/v2/tx_approval_request", (c) =>
+  handleCallback(c, "tx_approval"),
+);
+
+app.post("/callback/:handlerId/v2/config_change_sign_request", (c) =>
+  handleCallback(c, "config_change_sign"),
+);
+
+app.post("/callback/:handlerId/v2/config_change_approval_request", (c) =>
+  handleCallback(c, "config_change_approval"),
+);
 
 export default app;
