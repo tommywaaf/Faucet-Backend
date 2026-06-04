@@ -6,4 +6,6 @@ export const FAUCET_AMOUNTS: Record<string, string> = {
   SUI_TEST: "0.1",
   USDC_ETH_TEST5_0GER: "0.25",
   LINK_ETH_TEST5_BOTX: "0.05",
+  XRP_TEST: "20",
+  XLM_TEST: "200",
 };
